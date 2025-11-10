@@ -1,0 +1,720 @@
+sensor:
+  ##Ladesteuerung mit Claude programmiert
+  # Durchschnittspreis der nächsten 24 Stunden
+  - name: "Energiepreis Durchschnitt 24h"
+    unit_of_measurement: "€/kWh"
+    device_class: monetary
+    state: >
+      {% set prices = state_attr('sensor.spotty_15_raw', 'data') %}
+      {% if prices %}
+        {% set price_sum = prices | map(attribute='price_per_kwh') | sum %}
+        {{ (price_sum / prices | length)|float(0)/100 | round(5) }}
+      {% else %}
+        {{ states('sensor.energiepreis')|float(0) }}
+      {% endif %}
+
+  # Aktueller Preis vs. Durchschnitt (für dynamische Entscheidungen)
+  - name: "Preis Verhältnis zu Durchschnitt"
+    unit_of_measurement: "%"
+    state: >
+      {% set current_price = states('sensor.energiepreis_ct') | float(0)%}
+      {% set avg_price = states('sensor.energiepreis_durchschnitt_24h') | float*100 %}
+      {% if avg_price > 0 %}
+        {{ ((current_price / avg_price - 1)*100) | round(1) }}
+      {% else %}
+        0
+      {% endif %}
+
+  # PV-Überschuss Prognose für nächste 6 Stunden
+  - name: "PV Ueberschuss Prognose 6h"
+    unit_of_measurement: "kWh"
+    state: >
+      {% set hourly_data = state_attr('sensor.solcast_pv_forecast_prognose_heute', 'detailedHourly') %}
+      {% if hourly_data %}
+        {% set ns = namespace(pv_sum=0) %}
+        {% set start = now() %}
+        {% set end = start + timedelta(hours=6) %}
+        {% for item in hourly_data %}
+          {% set t = as_datetime(item.period_start) %}
+          {% if start <= t < end %}
+            {% set ns.pv_sum = ns.pv_sum + (item.pv_estimate10 | float(0)) %}
+          {% endif %}
+        {% endfor %}
+        {{ ns.pv_sum | round(2) }}
+      {% else %}
+        0
+      {% endif %}
+
+  # Gewinnspanne zwischen Einkauf und Verkauf
+  - name: "Stromhandel Gewinnspanne"
+    unit_of_measurement: "€/kWh"
+    device_class: monetary
+    state: >
+      {% set einspeise = states('sensor.einspeisepreis_spotty_eur') | float(0)%}
+      {% set bezug = states('sensor.energiepreis') | float(0)%}
+      {% set verluste = 0.2 %}  {# 20% Lade/Entlade-Verluste #}
+      {% set gewinn_schwelle = states('input_number.akku_mindestgewinn') | float(0.02) %}
+      {{ (einspeise - (bezug * (1 + verluste)) - gewinn_schwelle) | round(5) }}
+
+  # Prognose für niedrige Sonnentage (nächste 24h PV < 8 kWh)
+  - name: "Niedrig Sonnen Tag Prognose"
+    state: >
+      {% set heute_pv = state_attr('sensor.solcast_pv_forecast_prognose_heute', 'estimate10') | float(0)%}
+      {{ (heute_pv < states('input_number.limit_niedriger_sonnentag')|float(0)) }}
+
+
+# Teuerste 4 Stunden der nächsten 24 Stunden (für Entladung/Export)
+  - name: "Teuerste 4h Zeiten"
+    state: >
+      {% set prices = state_attr('sensor.spotty_15_raw', 'data') %}
+      {% if prices %}
+        {% set current_time = now() %}
+        {% set current_minute = current_time.minute %}
+        {% set rounded_minute = (current_minute // 15) * 15 %}
+        {% set current_period = current_time.replace(minute=rounded_minute, second=0, microsecond=0).strftime('%Y-%m-%dT%H:%M:00') %}
+        {% set sorted_prices = prices | sort(attribute='price_per_kwh', reverse=true) %}
+        {% set expensive_4 = sorted_prices[:16] %}
+        {% set expensive_times = expensive_4 | map(attribute='start_time') | map('truncate', 19, true, '') | list %}
+        {{ current_period in expensive_times }}
+      {% else %}
+        false
+      {% endif %}
+    attributes:
+      expensive_periods: >
+        {% set prices = state_attr('sensor.spotty_15_raw', 'data') %}
+        {% if prices %}
+          {% set sorted_prices = prices | sort(attribute='price_per_kwh', reverse=true) %}
+          {{ sorted_prices[:16] | map(attribute='start_time') | map('truncate', 19, true, '') | list }}
+        {% else %}
+          []
+        {% endif %}
+
+# Günstigste 4 Stunden der nächsten 24h für Laden
+  - name: "Guenstigste 4h Ladezeiten"
+    state: >
+      {% set prices = state_attr('sensor.spotty_15_raw', 'data') %}
+      {% if prices %}
+        {% set current_time = now() %}
+        {% set current_minute = current_time.minute %}
+        {% set rounded_minute = (current_minute // 15) * 15 %}
+        {% set current_period = current_time.replace(minute=rounded_minute, second=0, microsecond=0).strftime('%Y-%m-%dT%H:%M:00') %}
+        {% set one_hour_before = (current_time - timedelta(hours=1)).strftime('%Y-%m-%dT%H:%M:00') %}
+        {% set eight_hours_later = (current_time + timedelta(hours=8)).strftime('%Y-%m-%dT%H:%M:00') %}
+        {% set future_prices = prices | selectattr('start_time', '>=', one_hour_before) | selectattr('start_time', '<=', eight_hours_later) | list %}
+        {% if future_prices %}
+          {% set sorted_prices = future_prices | sort(attribute='price_per_kwh') %}
+          {% set cheapest_4 = sorted_prices[:16] %}
+          {% set cheapest_times = cheapest_4 | map(attribute='start_time') | map('truncate', 19, true, '') | list %}
+          {{ current_period in cheapest_times }}
+        {% else %}
+          false
+        {% endif %}
+      {% else %}
+        false
+      {% endif %}
+    attributes:
+      cheapest_periods: >
+        {% set prices = state_attr('sensor.spotty_15_raw', 'data') %}
+        {% if prices %}
+          {% set current_time = now() %}
+          {% set one_hour_before = (current_time - timedelta(hours=1)).strftime('%Y-%m-%dT%H:%M:00') %}
+          {% set eight_hours_later = (current_time + timedelta(hours=8)).strftime('%Y-%m-%dT%H:%M:00') %}
+          {% set future_prices = prices | selectattr('start_time', '>=', one_hour_before) | selectattr('start_time', '<=', eight_hours_later) | list %}
+          {% if future_prices %}
+            {% set sorted_prices = future_prices | sort(attribute='price_per_kwh') %}
+            {% set cheapest_4 = sorted_prices[:16] %}
+            {% set sorted_by_time = cheapest_4 | sort(attribute='start_time') %}
+            {{ sorted_by_time | map(attribute='start_time') | map('truncate', 19, true, '') | list }}
+          {% else %}
+            []
+          {% endif %}
+        {% else %}
+          []
+        {% endif %}
+
+  # Gewinnbringende Verkaufszeiten identifizieren
+  - name: "Gewinnbringende Verkaufszeit"
+    state: >
+      {% set gewinnspanne = states('sensor.stromhandel_gewinnspanne') | float(0)%}
+      {% set is_expensive = is_state('sensor.teuerste_4h_zeiten', 'True') %}
+      {% set current_soc = states('sensor.marstek_battery_soc') | int %}
+      {% set min_verkauf_soc = states('input_number.akku_min_verkauf_soc') | int(40) %}
+      {{ gewinnspanne > 0 and is_expensive and current_soc > min_verkauf_soc }}
+
+  - name: "Marstek 0 Ladung"
+    unit_of_measurement: "W"
+    device_class: power
+    state: >
+      {% set charging = states('sensor.marstek_battery_power') | float(0) %}
+      {% set previous_value = states('input_number.marstek_0_ladung_previous') | float(0) %}
+      {% set deadband = 100 %}  {# Totzone von ±100W #}
+      {# Nur ändern wenn außerhalb der Totzone #}
+      {% if charging | abs < deadband %}
+        {{ previous_value }}  {# Wert beibehalten #}
+      {% else %}
+        {# Schrittweise Anpassung #}
+        {% if charging > previous_value %}
+          {{ previous_value + 50 }}
+        {% elif charging < previous_value %}
+          {{ previous_value - 50 }}
+        {% else %}
+          {{ charging }}
+        {% endif %}
+      {% endif %}
+
+  - name: "Marstek 500 W"
+    unit_of_measurement: "W"
+    device_class: power
+    state: >
+      {% set charging = states('sensor.marstek_battery_power') | float(0) %}
+      {% set previous_value = states('input_number.marstek_1000_ladung_previous') | float(0) %}
+      {% set deadband = 100 %}  {# Totzone von ±100W #}
+      {% set target_adjustment = 500 %}  {# 1000W Ladung (negatives Vorzeichen) #}
+
+      {# Berechne gewünschten Gesamtwert #}
+      {% set desired_total = charging + target_adjustment %}
+
+      {# Nur ändern wenn außerhalb der Totzone #}
+      {% if (desired_total - previous_value) | abs < deadband %}
+        {{ previous_value }}  {# Wert beibehalten #}
+      {% else %}
+        {# Schrittweise Anpassung #}
+        {% if desired_total > previous_value %}
+          {{ previous_value + 50 }}
+        {% elif desired_total < previous_value %}
+          {{ previous_value - 50 }}
+        {% else %}
+          {{ desired_total }}
+        {% endif %}
+      {% endif %}
+
+  - name: "Marstek 1000 W"
+    unit_of_measurement: "W"
+    device_class: power
+    state: >
+      {% set charging = states('sensor.marstek_battery_power') | float(0) %}
+      {% set previous_value = states('input_number.marstek_1000_ladung_previous') | float(0) %}
+      {% set deadband = 100 %}  {# Totzone von ±100W #}
+      {% set target_adjustment = -1000 %}  {# 1000W Ladung (negatives Vorzeichen) #}
+
+      {# Berechne gewünschten Gesamtwert #}
+      {% set desired_total = charging + target_adjustment %}
+
+      {# Nur ändern wenn außerhalb der Totzone #}
+      {% if (desired_total - previous_value) | abs < deadband %}
+        {{ previous_value }}  {# Wert beibehalten #}
+      {% else %}
+        {# Schrittweise Anpassung #}
+        {% if desired_total > previous_value %}
+          {{ previous_value + 50 }}
+        {% elif desired_total < previous_value %}
+          {{ previous_value - 50 }}
+        {% else %}
+          {{ desired_total }}
+        {% endif %}
+      {% endif %}
+
+  - name: "Marstek 2000 W"
+    unit_of_measurement: "W"
+    device_class: power
+    state: >
+      {% set charging = states('sensor.marstek_battery_power') | float(0) %}
+      {% set previous_value = states('input_number.marstek_1000_ladung_previous') | float(0) %}
+      {% set deadband = 100 %}  {# Totzone von ±100W #}
+      {% set target_adjustment = -2000 %}  {# 1000W Ladung (negatives Vorzeichen) #}
+
+      {# Berechne gewünschten Gesamtwert #}
+      {% set desired_total = charging + target_adjustment %}
+
+      {# Nur ändern wenn außerhalb der Totzone #}
+      {% if (desired_total - previous_value) | abs < deadband %}
+        {{ previous_value }}  {# Wert beibehalten #}
+      {% else %}
+        {# Schrittweise Anpassung #}
+        {% if desired_total > previous_value %}
+          {{ previous_value + 50 }}
+        {% elif desired_total < previous_value %}
+          {{ previous_value - 50 }}
+        {% else %}
+          {{ desired_total }}
+        {% endif %}
+      {% endif %}
+
+  # Höchster Preis von Mitternacht bis 1h nach Sonnenaufgang
+  - name: "Hoechster Nachtpreis bis Sonnenaufgang"
+    unit_of_measurement: "ct/kWh"
+    state: >
+      {% set prices = state_attr('sensor.spotty_15_raw', 'data') %}
+      {% if prices %}
+        {% set current_time = now() %}
+        {% set midnight = current_time.replace(hour=0, minute=0, second=0, microsecond=0) %}
+        {% set sunrise = as_datetime(states('sensor.sun_next_rising')) %}
+        {% set one_hour_after_sunrise = sunrise + timedelta(hours=1) %}
+        
+        {# Filtere Preise zwischen Mitternacht und 1h nach Sonnenaufgang #}
+        {% set ns = namespace(max_price=0) %}
+        {% for price in prices %}
+          {% set price_time = as_datetime(price.start_time) %}
+          {% if midnight <= price_time <= one_hour_after_sunrise %}
+            {% if price.price_per_kwh > ns.max_price %}
+              {% set ns.max_price = price.price_per_kwh %}
+            {% endif %}
+          {% endif %}
+        {% endfor %}
+        {{ (ns.max_price | round(2)+1.79)*1.2+states('input_number.netznutzungsentgelt')|float(0)*100 }}
+      {% else %}
+        0
+      {% endif %}
+    attributes:
+      sonnenaufgang_plus_1h: >
+        {% set sunrise = as_datetime(states('sensor.sun_next_rising')) %}
+        {% set one_hour_after_sunrise = sunrise + timedelta(hours=1) %}
+        {% set local_time = (one_hour_after_sunrise | as_timestamp | timestamp_local) %}
+        {{ local_time[11:16] }} Uhr
+      stunden_bis_sonnenaufgang_plus_1h: >
+        {% set current_time = now() %}
+        {% set sunrise = as_datetime(states('sensor.sun_next_rising')) %}
+        {% set one_hour_after_sunrise = sunrise + timedelta(hours=1) %}
+        {% set time_diff = (one_hour_after_sunrise - current_time).total_seconds() / 3600 %}
+        {{ time_diff | round(1) }} h
+
+  # Prüfung ob aktueller Preis wirtschaftlich ist (basierend auf Ladeeffizienz)
+  - name: "Nachtladung Wirtschaftlich"
+    state: >
+      {% set current_price = states('sensor.energiepreis_ct') | float(0)%}
+      {% set max_night_price = states('sensor.hoechster_nachtpreis_bis_sonnenaufgang') | float(0)%}
+      {% set threshold_percent = states('sensor.preisschwelle_mit_effizienz') | float(80) / 100 %}
+      {% set current_hour = now().hour %}
+      {% set is_night = current_hour < 6 or current_hour > 22 %}
+      
+      {% if is_night and max_night_price > 0 %}
+        {# Preis muss unter Schwelle sein (basierend auf Effizienz + Puffer) #}
+        {% set price_threshold = max_night_price * threshold_percent %}
+        {{ current_price <= price_threshold }}
+      {% else %}
+        false
+      {% endif %}
+    attributes:
+      aktueller_preis: "{{ states('sensor.energiepreis_ct') | float(0)| round(2) }} ct/kWh"
+      max_nachtpreis: "{{ states('sensor.hoechster_nachtpreis_bis_sonnenaufgang') | float(0)| round(2) }} ct/kWh"
+      preisschwelle_prozent: "{{ states('sensor.preisschwelle_mit_effizienz') | float(80) | round(1) }}%"
+      preisschwelle_absolut: "{{ (states('sensor.hoechster_nachtpreis_bis_sonnenaufgang') | float(0)* states('sensor.preisschwelle_mit_effizienz') | float(80) / 100) | round(2) }} ct/kWh"
+      preisdifferenz_prozent: >
+        {% set current = states('sensor.energiepreis_ct') | float(0)%}
+        {% set max_price = states('sensor.hoechster_nachtpreis_bis_sonnenaufgang') | float(0)%}
+        {% if max_price > 0 %}
+          {{ ((1 - current / max_price) * 100) | round(1) }}%
+        {% else %}
+          0%
+        {% endif %}
+
+  # Höchster Preis von jetzt bis Mitternacht (für Tagesladung)
+  - name: "Hoechster Preis bis Mitternacht"
+    unit_of_measurement: "ct/kWh"
+    state: >
+      {% set prices = state_attr('sensor.spotty_15_raw', 'data') %}
+      {% if prices %}
+        {% set current_time = now() %}
+        {% set midnight = (current_time + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0) %}
+        
+        {# Filtere Preise von jetzt bis Mitternacht #}
+        {% set ns = namespace(max_price=0) %}
+        {% for price in prices %}
+          {% set price_time = as_datetime(price.start_time) %}
+          {% if current_time <= price_time < midnight %}
+            {% if price.price_per_kwh > ns.max_price %}
+              {% set ns.max_price = price.price_per_kwh %}
+            {% endif %}
+          {% endif %}
+        {% endfor %}
+        {{ (ns.max_price | round(2)+1.79)*1.2+states('input_number.netznutzungsentgelt')|float(0)*100 }}
+      {% else %}
+        0
+      {% endif %}
+
+  # Tagesladung wirtschaftlich (basierend auf Ladeeffizienz)
+  - name: "Tagesladung Wirtschaftlich"
+    state: >
+      {% set current_price = states('sensor.energiepreis_ct') | float(0)%}
+      {% set max_day_price = states('sensor.hoechster_preis_bis_mitternacht') | float(0)%}
+      {% set threshold_percent = states('sensor.preisschwelle_mit_effizienz') | float(80) / 100 %}
+      {% set current_hour = now().hour %}
+      {% set is_day = current_hour >= 6 and current_hour <= 22 %}
+      
+      {% if is_day and max_day_price > 0 %}
+        {# Preis muss unter Schwelle sein (basierend auf Effizienz + Puffer) #}
+        {% set price_threshold = max_day_price * threshold_percent %}
+        {{ current_price <= price_threshold }}
+      {% else %}
+        false
+      {% endif %}
+    attributes:
+      aktueller_preis: "{{ states('sensor.energiepreis_ct') | float(0)| round(2) }} ct/kWh"
+      max_preis_bis_mitternacht: "{{ states('sensor.hoechster_preis_bis_mitternacht') | float(0)| round(2) }} ct/kWh"
+      preisschwelle_prozent: "{{ states('sensor.preisschwelle_mit_effizienz') | float(80) | round(1) }}%"
+      preisschwelle_absolut: "{{ (states('sensor.hoechster_preis_bis_mitternacht') | float(0)* states('sensor.preisschwelle_mit_effizienz') | float(80) / 100) | round(2) }} ct/kWh"
+      preisdifferenz_prozent: >
+        {% set current = states('sensor.energiepreis_ct') | float(0)%}
+        {% set max_price = states('sensor.hoechster_preis_bis_mitternacht') | float(0)%}
+        {% if max_price > 0 %}
+          {{ ((1 - current / max_price) * 100) | round(1) }}%
+        {% else %}
+          0%
+        {% endif %}
+
+  - name: "Ladesteuerung Grund"
+    state: "{{ state_attr('sensor.marstek_intelligente_ladesteuerung', 'grund') }}"
+
+  - name: "Marstek Intelligente Ladesteuerung"
+    unit_of_measurement: "W"
+    device_class: power
+    state: >
+      {% set intelligente_steuerung_aktiv = is_state('input_boolean.intelligente_ladesteuerung', 'on') %}
+      {% set current_load = states('sensor.leistung_alle_phasen') | float(0) %}
+      
+      {# INTELLIGENTE STEUERUNG DEAKTIVIERT - nur Hausverbrauch decken #}
+      {% if not intelligente_steuerung_aktiv %}
+        {{ current_load }}
+      
+      {# INTELLIGENTE STEUERUNG AKTIV - alle Funktionen #}
+      {% else %}
+        {% set current_soc = states('sensor.marstek_battery_soc') | int %}
+        {% set max_soc = states('input_number.akku_max_soc') | int %}
+        {% set nacht_soc = states('input_number.akku_nacht_soc') | int %}
+        {% set EAuto_Ladegrund = states('sensor.go_echarger_221557_modelstatus') %}
+        {% set EAuto_Ladestatus = states('sensor.go_echarger_221557_car') %}
+        {% set Marstek_zero = states('sensor.marstek_0_ladung') %}
+        {% set Marstek_E500 = states('sensor.marstek_500_w') %}
+        {% set Marstek_K = states('sensor.marstek_1000_w') %}
+        {% set Marstek_2K = states('sensor.marstek_2000_w') %}
+        {% set is_low_sun_day = is_state('sensor.niedrig_sonnen_tag_prognose', 'True') %}
+        {% set is_cheapest_4h = is_state('sensor.guenstigste_4h_ladezeiten', 'True') %}
+        {% set is_profitable_selling = is_state('sensor.gewinnbringende_verkaufszeit', 'True') %}
+        {% set is_night_charging_economical = is_state('sensor.nachtladung_wirtschaftlich', 'True') %}
+        {% set is_day_charging_economical = is_state('sensor.tagesladung_wirtschaftlich', 'True') %}
+        {% set potential_frei = states('sensor.leistung_potential_frei') | float(0) %}
+        {% if current_load < potential_frei %}
+          {% set potential_frei = current_load %}
+        {% else %}
+          {% set potential_frei = potential_frei %}
+        {% endif %}
+        {% set current_hour = now().hour %}
+        {% set is_night = is_state('sun.sun', 'below_horizon') %}
+        {% set wpstatus = states('sensor.warmepumpe_status') %}
+
+        {# INTELLIGENTE OPTIMIERTE STEUERUNG #}
+        
+        {# 1. GEWINNBRINGENDER VERKAUF: Höchste Priorität #}
+        {% if is_profitable_selling and is_state('input_boolean.akku_export_modus','on')%}
+          2500
+        
+        {# 2. MANUELLE ÜBERSTEUERUNGEN: Nur wenn Nacht wirtschaftlich oder nicht Nacht #}
+        {% elif is_state('input_boolean.akku_25_kwh_laden', 'on') and (not is_night or is_night_charging_economical) %}
+          -2500
+        {% elif is_state('input_boolean.akku_2_kwh_laden', 'on') and is_state('input_boolean.akku_nachtladung_durchfuehren', 'on') and (not is_night or is_night_charging_economical) %}
+          -2500
+        {% elif is_state('input_boolean.akku_15_kwh_laden', 'on') and is_state('input_boolean.akku_nachtladung_durchfuehren', 'on') and (not is_night or is_night_charging_economical) %}
+          -2500
+        {% elif is_state('input_boolean.akku_1_kwh_laden', 'on') and is_state('input_boolean.akku_nachtladung_durchfuehren', 'on') and (not is_night or is_night_charging_economical) %}
+          -2500
+        {% elif is_state('input_boolean.akku_05_kwh_laden', 'on') and is_state('input_boolean.akku_nachtladung_durchfuehren', 'on') and (not is_night or is_night_charging_economical) %}
+          -2500
+        {% elif is_state('input_boolean.strom_gunstig', 'on') and is_state('input_boolean.akku_laden_wenn_strom_gunstig', 'on') and (not is_night or is_night_charging_economical) %}
+          -2000
+        
+        {# 3. SCHWACHER SONNENTAG: Vollladen zu günstigsten Zeiten (mit Tag- und Nacht-Preischeck) #}
+        {% elif is_low_sun_day and EAuto_Ladestatus != "Charging" and wpstatus != "heating" %}
+          {# In der Nacht nur laden wenn wirtschaftlich (>20% unter Maximum) #}
+          {% if is_night and not is_night_charging_economical %}
+            {# Nachtladung nicht wirtschaftlich - nur Hausverbrauch #}
+            {{ current_load }}
+          {# Tagsüber nur laden wenn wirtschaftlich gegenüber Preisen bis Mitternacht #}
+          {% elif not is_night and not is_day_charging_economical %}
+            {# Tagesladung nicht wirtschaftlich - nur Hausverbrauch #}
+            {{ current_load }}
+          {% elif current_soc < max_soc and is_cheapest_4h and not is_night%}
+            {# Unter max_soc - maximale Laderate #}
+            {{ Marstek_2K }}
+          {% elif current_soc < nacht_soc and is_cheapest_4h and is_night%}
+            {# Unter max_soc - maximale Laderate #}
+            {{ Marstek_2K }}
+          {% elif current_soc >= nacht_soc and is_cheapest_4h and is_night%}
+            {# Über max_soc - 0 #}
+            {{ Marstek_zero }}
+          {% else %}
+            {# Auf oder über max_soc - Standard ist Marstek_zero, außer bei hohem Verbrauch #}
+            {% if potential_frei < -100 %}
+              {{ current_load }}
+            {% else %}
+              {{ current_load }}
+            {% endif %}
+          {% endif %}
+          
+          {# 5a. E-Auto Laden bei günstigem Strom unter max_soc (mit Nacht-Preischeck) #}
+          {% elif EAuto_Ladegrund == "Charging because Awattar price under threshold" and current_soc < max_soc and EAuto_Ladestatus == "Charging" %}
+            {% if is_night and not is_night_charging_economical %}
+              {{ Marstek_zero }}
+            {% else %}
+              {{ Marstek_2K }}
+            {% endif %}
+          
+          {# 5b. E-Auto Laden bei günstigem Strom ab max_soc #}
+          {% elif EAuto_Ladegrund == "Charging because Awattar price under threshold" and current_soc >= max_soc and EAuto_Ladestatus == "Charging" %}
+            {{ Marstek_zero }}
+
+          {# 5c. E-Auto Laden bei PV Überschuss unter max_soc #}
+          {% elif EAuto_Ladegrund == "Charging because of PV surplus" and current_soc < max_soc and EAuto_Ladestatus == "Charging" %}
+            {{ Marstek_2K }}
+
+          {# 5d. E-Auto Laden bei PV Überschuss über max_soc #}
+          {% elif EAuto_Ladegrund == "Charging because of PV surplus" and current_soc >= max_soc and EAuto_Ladestatus == "Charging" %}
+            {{ Marstek_zero }}
+
+          {# 5e. E-Auto Laden über max_soc #}
+          {% elif EAuto_Ladegrund == "Charging because of fallback (Default)" and current_soc >= max_soc and EAuto_Ladestatus == "Charging" %}
+            {{ Marstek_zero }}
+
+          {# 5f. E-Auto Laden unter max_soc (mit Nacht-Preischeck) #}
+          {% elif EAuto_Ladegrund == "Charging because of fallback (Default)" and current_soc < max_soc and EAuto_Ladestatus == "Charging" %}
+            {% if is_night and not is_night_charging_economical %}
+              {{ Marstek_zero }}
+            {% else %}
+              {{ Marstek_2K }}
+            {% endif %}
+
+          {# 5g. E-Auto Laden unter max_soc (mit Nacht-Preischeck) #}
+          {% elif EAuto_Ladegrund == "Charging because of forced ON" and current_soc < max_soc and EAuto_Ladestatus == "Charging" %}
+            {% if is_night and not is_night_charging_economical %}
+              {{ Marstek_zero }}
+            {% else %}
+              {{ Marstek_2K }}
+            {% endif %}
+          
+            {# 5h. E-Auto Laden über max_soc #}
+          {% elif EAuto_Ladegrund == "Charging because of forced ON" and current_soc >= max_soc and EAuto_Ladestatus == "Charging" %}
+            {{ Marstek_zero }}
+
+          {# 6a. Heizung (mit Nacht-Preischeck) #}
+          {% elif wpstatus == "heating" and current_soc < nacht_soc and is_night %}
+            {% if is_night_charging_economical %}
+              {{ Marstek_K }}
+            {% else %}
+              {{ Marstek_zero }}
+            {% endif %}
+
+          {# 6b. Heizung (mit Nacht-Preischeck) #}
+          {% elif wpstatus == "heating" and current_soc > nacht_soc and is_night %}
+            {{ Marstek_zero }}
+
+          {# 6c. Heizung (mit Tag-Preischeck) #}
+          {% elif wpstatus == "heating" and current_soc > max_soc and not is_night %}
+            {% if potential_frei < -100 %}
+              {{ current_load }}
+            {% elif is_day_charging_economical %}
+              {{ Marstek_K }}
+            {% endif %}
+          
+          {# 6d. Heizung (mit Tag-Preischeck) #}
+          {% elif wpstatus == "heating" and current_soc < max_soc and not is_night %}
+            {% if potential_frei < -100 %}
+              {{ current_load }}
+            {% elif is_day_charging_economical and is_low_sun_day %}
+              {{ Marstek_K }}
+            {% else %}
+              {{ Marstek_zero }}
+            {% endif %}
+
+          {# 6e. Warmwasser (mit Tag-Preischeck) #}
+          {% elif wpstatus == "heating_water" %}
+            {% if is_night %}
+              {{ Marstek_zero }}
+            {% elif potential_frei < -100 %}
+              {{ current_load }}
+            {% elif not is_low_sun_day %}
+              {{ current_load }}
+            {% else %}
+              {{ Marstek_zero }}
+            {% endif %}
+
+          {# 7. Whirlpool #}
+          {% elif states('sensor.whirlpool_warmepumpe_s_switch_0_power') | float(0) > 200 and states('sensor.marstek_battery_power') | float(0) < -200 %}
+              {{ Marstek_zero }}
+
+          {# 9. STANDARD: Hausverbrauch decken #}
+          {% else %}
+            {{ current_load }}
+          {% endif %}
+      {% endif %}
+    attributes:
+      grund: >
+        {% set intelligente_steuerung_aktiv = is_state('input_boolean.intelligente_ladesteuerung', 'on') %}
+        
+        {% if not intelligente_steuerung_aktiv %}
+          ⚠️ INTELLIGENTE STEUERUNG DEAKTIVIERT - Nur Hausverbrauch
+        {% else %}
+          {% set current_soc = states('sensor.marstek_battery_soc') | int %}
+          {% set EAuto_Ladegrund = states('sensor.go_echarger_221557_modelstatus') %}
+          {% set EAuto_Ladestatus = states('sensor.go_echarger_221557_car') %}
+          {% set is_low_sun_day = is_state('sensor.niedrig_sonnen_tag_prognose', 'True') %}
+          {% set is_cheapest_4h = is_state('sensor.guenstigste_4h_ladezeiten', 'True') %}
+          {% set is_profitable_selling = is_state('sensor.gewinnbringende_verkaufszeit', 'True') %}
+          {% set is_night_charging_economical = is_state('sensor.nachtladung_wirtschaftlich', 'True') %}
+          {% set is_day_charging_economical = is_state('sensor.tagesladung_wirtschaftlich', 'True') %}
+          {% set current_hour = now().hour %}
+          {% set is_night = is_state('sun.sun', 'below_horizon') %}
+          {% set max_soc = states('input_number.akku_max_soc') | int %}
+          {% set nacht_soc = states('input_number.akku_nacht_soc') | int %}
+          {% set wpstatus = states('sensor.warmepumpe_status') %}
+          {% set potential_frei = states('sensor.leistung_potential_frei') | float(0) %}
+
+          {% if is_profitable_selling %}
+            Gewinnbringender Verkauf ({{ current_hour }}:xx Uhr)
+          {% elif is_state('input_boolean.akku_25_kwh_laden', 'on') %}
+            {% if is_night and not is_night_charging_economical %}
+              Manuelle Übersteuerung - 2,5 kWh laden - NICHT wirtschaftlich, nur Hausverbrauch
+            {% else %}
+              Manuelle Übersteuerung - 2,5 kWh laden
+            {% endif %}
+          {% elif is_state('input_boolean.akku_2_kwh_laden', 'on') and is_state('input_boolean.akku_nachtladung_durchfuehren', 'on') %}
+            {% if is_night and not is_night_charging_economical %}
+              Manuelle Übersteuerung - 2 kWh Nachtladung - NICHT wirtschaftlich, nur Hausverbrauch
+            {% else %}
+              Manuelle Übersteuerung - 2 kWh Nachtladung
+            {% endif %}
+          {% elif is_state('input_boolean.akku_15_kwh_laden', 'on') and is_state('input_boolean.akku_nachtladung_durchfuehren', 'on') %}
+            {% if is_night and not is_night_charging_economical %}
+              Manuelle Übersteuerung - 1,5 kWh Nachtladung - NICHT wirtschaftlich, nur Hausverbrauch
+            {% else %}
+              Manuelle Übersteuerung - 1,5 kWh Nachtladung
+            {% endif %}
+          {% elif is_state('input_boolean.akku_1_kwh_laden', 'on') and is_state('input_boolean.akku_nachtladung_durchfuehren', 'on') %}
+            {% if is_night and not is_night_charging_economical %}
+              Manuelle Übersteuerung - 1 kWh Nachtladung - NICHT wirtschaftlich, nur Hausverbrauch
+            {% else %}
+              Manuelle Übersteuerung - 1 kWh Nachtladung
+            {% endif %}
+          {% elif is_state('input_boolean.akku_05_kwh_laden', 'on') and is_state('input_boolean.akku_nachtladung_durchfuehren', 'on') %}
+            {% if is_night and not is_night_charging_economical %}
+              Manuelle Übersteuerung - 0,5 kWh Nachtladung - NICHT wirtschaftlich, nur Hausverbrauch
+            {% else %}
+              Manuelle Übersteuerung - 0,5 kWh Nachtladung
+            {% endif %}
+          {% elif is_state('input_boolean.strom_gunstig', 'on') and is_state('input_boolean.akku_laden_wenn_strom_gunstig', 'on') %}
+            {% if is_night and not is_night_charging_economical %}
+              Manuelle Übersteuerung - Laden bei günstigem Strom - NICHT wirtschaftlich, nur Hausverbrauch
+            {% else %}
+              Manuelle Übersteuerung - Laden bei günstigem Strom
+            {% endif %}
+
+          {% elif is_low_sun_day and EAuto_Ladestatus != "Charging" and wpstatus != "heating" %}
+            {% if is_night and not is_night_charging_economical %}
+              Schwacher Sonnentag - Nachts NICHT wirtschaftlich - nur Hausverbrauch (SOC: {{ current_soc }}%)
+            {% elif not is_night and not is_day_charging_economical %}
+              Schwacher Sonnentag - Tagsüber NICHT wirtschaftlich - nur Hausverbrauch (SOC: {{ current_soc }}%)
+            {% elif current_soc < max_soc and is_cheapest_4h and not is_night%}
+              Schwacher Sonnentag - Günstigste 4h - Laden unter Tags mit 2kW bis {{ max_soc }}% (SOC: {{ current_soc }}%)
+            {% elif current_soc < nacht_soc and is_cheapest_4h and is_night%}
+              Schwacher Sonnentag - Günstigste 4h - Laden in der Nacht mit 2kW bis {{ nacht_soc }}% (SOC: {{ current_soc }}%)
+            {% elif current_soc >= nacht_soc and is_cheapest_4h and is_night%}
+              Schwacher Sonnentag - Günstigste 4h - Laden pausieren {{ nacht_soc }}% (SOC: {{ current_soc }}%)
+            {% else %}
+              {% set potential_frei = states('sensor.leistung_potential_frei') | float(0) %}
+              {% if current_soc >= max_soc %}
+                Schwacher Sonnentag - Akku voll (SOC: {{ current_soc }}%) - Hausverbrauch
+              {% elif potential_frei < -100 %}
+                Schwacher Sonnentag - Hoher Verbrauch ({{ potential_frei | round(0) }}W) - Hausverbrauch (SOC: {{ current_soc }}%)
+              {% else %}
+                Schwacher Sonnentag - Warte auf günstigste 4h - Hausverbrauch (SOC: {{ current_soc }}%)
+              {% endif %}
+            {% endif %}
+
+            {% elif EAuto_Ladegrund == "Charging because Awattar price under threshold" and current_soc < max_soc and EAuto_Ladestatus == "Charging" %}
+              {% if is_night and not is_night_charging_economical %}
+                E-Auto lädt - Nachtladung NICHT wirtschaftlich - nur E-Auto (SOC: {{ current_soc }} %)
+              {% else %}
+                E-Auto lädt bei günstigem Strom - Akku mitladen bis max SOC: {{ max_soc }} % (SOC: {{ current_soc }} %)
+              {% endif %}
+            {% elif EAuto_Ladegrund == "Charging because Awattar price under threshold" and current_soc >= max_soc and EAuto_Ladestatus == "Charging" %}
+              E-Auto lädt bei günstigem Strom - Akku über max SOC: {{ max_soc }} %, nur Hausverbrauch (max SOC: {{ max_soc }} % SOC: {{ current_soc }} %)
+            {% elif EAuto_Ladegrund == "Charging because of PV surplus" and current_soc < max_soc and EAuto_Ladestatus == "Charging" %}
+              E-Auto lädt mit PV (PV Akku < {{ max_soc }} % SOC: {{ current_soc }} %)
+            {% elif EAuto_Ladegrund == "Charging because of PV surplus" and current_soc >= max_soc and EAuto_Ladestatus == "Charging" %}
+              E-Auto lädt mit PV (PV Akku > {{ max_soc }} % SOC: {{ current_soc }} %)
+            {% elif EAuto_Ladegrund == "Charging because of fallback (Default)" and current_soc >= max_soc and EAuto_Ladestatus == "Charging" %}
+              E-Auto Fallback-Ladung - Akku über {{ max_soc }}%, nur Hausverbrauch (max SOC: {{ max_soc }} % SOC: {{ current_soc }} %)
+            {% elif EAuto_Ladegrund == "Charging because of fallback (Default)" and current_soc < max_soc and EAuto_Ladestatus == "Charging" %}
+              {% if is_night and not is_night_charging_economical %}
+                E-Auto Fallback - Nachtladung NICHT wirtschaftlich - nur E-Auto (SOC: {{ current_soc }} %)
+              {% else %}
+                E-Auto Fallback-Ladung - Akku unter {{ max_soc }}%, mitladen (max SOC: {{ max_soc }} % SOC: {{ current_soc }} %)
+              {% endif %}
+            {% elif EAuto_Ladegrund == "Charging because of forced ON" and current_soc < max_soc and EAuto_Ladestatus == "Charging" %}
+              {% if is_night and not is_night_charging_economical %}
+                E-Auto lädt - Nachtladung NICHT wirtschaftlich - nur E-Auto (SOC: {{ current_soc }} %)
+              {% else %}
+                E-Auto lädt bei günstigem Strom - Akku mitladen bis max SOC: {{ max_soc }} % (SOC: {{ current_soc }} %)
+              {% endif %}
+            {% elif EAuto_Ladegrund == "Charging because of forced ON" and current_soc >= max_soc and EAuto_Ladestatus == "Charging" %}
+              E-Auto Fallback-Ladung - Akku über {{ max_soc }}%, nur Hausverbrauch (max SOC: {{ max_soc }} % SOC: {{ current_soc }} %)
+            {% elif wpstatus == "heating" and current_soc < nacht_soc and is_night %}
+              {% if is_night_charging_economical %}
+                Heizung Nacht - unter SOC - Ladung wirtschaftlich
+              {% else %}
+                Heizung Nacht - unter SOC - Ladung NICHT wirtschaftlich
+              {% endif %}
+            {% elif wpstatus == "heating" and current_soc > nacht_soc and is_night %}
+              {% if is_night_charging_economical %}
+                Heizung Nacht - über SOC - Ladung wirtschaftlich
+              {% else %}
+                Heizung Nacht - über SOC - Ladung NICHT wirtschaftlich
+              {% endif %}
+            {% elif wpstatus == "heating" and current_soc < nacht_soc and is_night %}
+              {% if is_night_charging_economical %}
+                Heizung Nacht - unter SOC - Ladung wirtschaftlich
+              {% else %}
+                Heizung Nacht - unter SOC - Ladung NICHT wirtschaftlich
+              {% endif %}
+            {% elif wpstatus == "heating" and current_soc > nacht_soc and is_night %}
+              Heizung Nacht - über SOC
+            {% elif wpstatus == "heating" and current_soc > max_soc and not is_night %}
+              {% set potential_frei = states('sensor.leistung_potential_frei') | float(0) %}
+              {% if potential_frei < -100 %}
+                Heizung Tag - über max_soc - Hoher Verbrauch ({{ potential_frei | round(0) }}W) - Hausverbrauch (SOC: {{ current_soc }}%)
+              {% elif is_day_charging_economical %}
+                Heizung Tag - über max_soc - Tagesladung wirtschaftlich - kein Laden (SOC: {{ current_soc }}%)
+              {% else %}
+                Heizung Tag - über max_soc - Tagesladung NICHT wirtschaftlich - kein Laden (SOC: {{ current_soc }}%)
+              {% endif %}
+            {% elif wpstatus == "heating" and current_soc < max_soc and not is_night %}
+              {% set potential_frei = states('sensor.leistung_potential_frei') | float(0) %}
+              {% if potential_frei < -100 %}
+                Heizung Tag - unter max_soc - Hausverbrauch (SOC: {{ current_soc }}%)
+              {% elif is_day_charging_economical  and is_low_sun_day %}
+                Heizung Tag - unter max_soc - Tagesladung wirtschaftlich - Laden mit 1kW (SOC: {{ current_soc }}%)
+              {% else %}
+                Heizung Tag - unter max_soc - Tagesladung NICHT wirtschaftlich - kein Laden (SOC: {{ current_soc }}%)
+              {% endif %}
+            {% elif wpstatus == "heating_water" %}
+              {% if is_night %}
+                Warmwasser Nacht - Marstek 0
+              {% elif potential_frei < -100 %}
+                Warmwasser Tag - Hoher Verbrauch ({{ potential_frei | round(0) }}W) - Hausverbrauch
+              {% elif not is_low_sun_day %}
+                Warmwasser Tag - Normaler Sonnentag - Hausverbrauch
+              {% else %}
+                Warmwasser Tag - Schwacher Sonnentag - Marstek 0
+              {% endif %}
+            {% elif states('sensor.whirlpool_warmepumpe_s_switch_0_power') | float(0) > 200 and states('sensor.marstek_battery_power') | float(0) < -200 %}
+              Whirlpool Marstek 0
+            {% else %}
+              Standard - Hausverbrauch decken
+            {% endif %}
+        {% endif %}
+      aktueller_soc: "{{ states('sensor.marstek_battery_soc') | int }}%"
+      nacht_zeit: "{{ (now().hour < 6 or now().hour > 22) }}"
+      nachtladung_wirtschaftlich: "{{ is_state('sensor.nachtladung_wirtschaftlich', 'True') }}"
+      tagesladung_wirtschaftlich: "{{ is_state('sensor.tagesladung_wirtschaftlich', 'True') }}"
+      guenstigste_zeit: "{{ is_state('sensor.guenstigste_4h_ladezeiten', 'True') }}"
+      schwacher_sonnentag: "{{ is_state('sensor.niedrig_sonnen_tag_prognose', 'True') }}"
+      gewinnbringender_verkauf: "{{ is_state('sensor.gewinnbringende_verkaufszeit', 'True') }}"
+      intelligente_steuerung: "{{ is_state('input_boolean.intelligente_ladesteuerung', 'on') }}"
