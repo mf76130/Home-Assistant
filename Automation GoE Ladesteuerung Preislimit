@@ -1,0 +1,52 @@
+alias: GoE Ladesteuerung Preislimit
+description: ""
+triggers:
+  - trigger: state
+    entity_id:
+      - input_number.goe_ladelimit
+      - input_boolean.goe_ladelimit
+      - sensor.energiepreis_ct
+    for:
+      hours: 0
+      minutes: 0
+      seconds: 10
+conditions: []
+actions:
+  - choose:
+      - conditions:
+          - condition: numeric_state
+            entity_id: sensor.energiepreis_ct
+            below: input_number.goe_ladelimit
+          - condition: state
+            entity_id: input_boolean.goe_ladelimit
+            state: "on"
+        sequence:
+          - device_id: 62338eb7ce1383d8b22dda1f717e4485
+            domain: select
+            entity_id: e8ff8ccfe5b181badeac1e5ae70765b8
+            type: select_option
+            option: Charge
+      - conditions:
+          - condition: numeric_state
+            entity_id: sensor.energiepreis_ct
+            above: input_number.goe_ladelimit
+          - condition: state
+            entity_id: input_boolean.goe_ladelimit
+            state: "on"
+        sequence:
+          - device_id: 62338eb7ce1383d8b22dda1f717e4485
+            domain: select
+            entity_id: e8ff8ccfe5b181badeac1e5ae70765b8
+            type: select_option
+            option: Neutral
+      - conditions:
+          - condition: state
+            entity_id: input_boolean.goe_ladelimit
+            state: "off"
+        sequence:
+          - device_id: 62338eb7ce1383d8b22dda1f717e4485
+            domain: select
+            entity_id: e8ff8ccfe5b181badeac1e5ae70765b8
+            type: select_option
+            option: Neutral
+mode: single
