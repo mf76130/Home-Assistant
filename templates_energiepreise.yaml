@@ -1,0 +1,320 @@
+sensor:
+  ## Energiekosten
+  - name: Netzentgelt monatlich 2025
+    unit_of_measurement: "€"
+    device_class: monetary
+    state: "{{((states('sensor.energy_import_monthly')|float(0))*states('input_number.netznutzungsentgelt')|float(0))|round(2)}}"
+
+  - name: "Strom Fixkosten Monatlich"
+    state: "14.6"
+    unit_of_measurement: "€"
+    device_class: monetary
+    state_class: total_increasing
+
+  - name: "Strom Fixkosten"
+    state: "14.6"
+    unit_of_measurement: "€/kWh"
+    device_class: monetary
+
+  - name: "Strom Fixkosten Energydashboard"
+    state: "{{ states('input_number.strom_fixkosten_akkumulator') | float(0) }}"
+    unit_of_measurement: "kWh"
+    device_class: energy
+    state_class: total_increasing
+
+  - name: Energiepreis_Abweichung
+    unit_of_measurement: "ct/kWh"
+    device_class: monetary
+    state: "{{((states('sensor.energiepreis_ct'))|float(0)-(states('sensor.energiepreis_durchschnitt'))|float(0))|round(2)}}"
+
+  - name: Energiepreis_ct
+    unit_of_measurement: "ct/kWh"
+    device_class: monetary
+    state: "{{(((states('sensor.epex_spot_15')|float(0)+1.79)*1.2+states('input_number.netznutzungsentgelt')|float(0)*100))|round(3)}}"
+
+  - name: Energiepreis_next_ct
+    unit_of_measurement: "ct/kWh"
+    device_class: monetary
+    state: "{{(((states('sensor.epex_spot_15_nachster_preis')|float(0)+1.79)*1.2+states('input_number.netznutzungsentgelt')|float(0)*100))|round(3)}}"
+
+  - name: Energiepreis_next2_ct
+    unit_of_measurement: "ct/kWh"
+    device_class: monetary
+    state: "{{(((states('sensor.epex_spot_15_nachster_preis_2')|float(0)+1.79)*1.2+states('input_number.netznutzungsentgelt')|float(0)*100))|round(3)}}"
+
+  - name: Energiepreis_next3_ct
+    unit_of_measurement: "ct/kWh"
+    device_class: monetary
+    state: "{{(((states('sensor.epex_spot_15_nachster_preis_3')|float(0)+1.79)*1.2+states('input_number.netznutzungsentgelt')|float(0)*100))|round(3)}}"
+
+  - name: Energiepreis_next4_ct
+    unit_of_measurement: "ct/kWh"
+    device_class: monetary
+    state: "{{(((states('sensor.epex_spot_15_nachster_preis_4')|float(0)+1.79)*1.2+states('input_number.netznutzungsentgelt')|float(0)*100))|round(3)}}"
+
+  - name: Energiepreis
+    unit_of_measurement: "€/kWh"
+    device_class: monetary
+    state: "{{(states('sensor.energiepreis_ct')|float/100)}}"
+    
+  - name: Energiepreis Netto
+    unit_of_measurement: "ct/kWh"
+    device_class: monetary
+    state: "{{((states('sensor.epex_spot_15')|float()))|round(2)}}"
+  
+  - name: Energiepreis Brutto
+    unit_of_measurement: "ct/kWh"
+    device_class: monetary
+    state: "{{(((states('sensor.epex_spot_15')|float(0))+1.79)*1.2)|round(2)}}"
+
+  - name: Energiepreis Brutto Eur
+    unit_of_measurement: "€/kWh"
+    device_class: monetary
+    state: "{{((((states('sensor.epex_spot_15')|float(0))+1.79)*1.2)|round(2))/100}}"
+  
+  - name: Einspeisepreis Spotty
+    unit_of_measurement: "ct/kWh"
+    device_class: monetary
+    state: "{{((states('sensor.epex_spot_15')|float(0)-1.79))|round(4)}}"
+
+  - name: Einspeisepreis_next_ct
+    unit_of_measurement: "ct/kWh"
+    device_class: monetary
+    state: "{{(states('sensor.epex_spot_15_nachster_preis')|float(0)-1.79)|round(3)}}"
+
+  - name: Einspeisepreis_next2_ct
+    unit_of_measurement: "ct/kWh"
+    device_class: monetary
+    state: "{{(states('sensor.epex_spot_15_nachster_preis_2')|float(0)-1.79)|round(3)}}"
+
+  - name: Einspeisepreis_next3_ct
+    unit_of_measurement: "ct/kWh"
+    device_class: monetary
+    state: "{{(states('sensor.epex_spot_15_nachster_preis_3')|float(0)-1.79)|round(3)}}"
+
+  - name: Einspeisepreis Spotty €
+    unit_of_measurement: "€/kWh"
+    device_class: monetary
+    state: "{{(states('sensor.einspeisepreis_spotty')|float(0))/100}}"
+
+  - name: "EPEX Spot 15"
+    unique_id: sensor.epex_spot_15
+    unit_of_measurement: "ct/kWh"
+    state: >
+      {% set prices = state_attr('sensor.spotty_15_raw','data') %}
+      {% if prices is not none %}
+        {% set nowtime = now() %}
+        {% set current = prices | selectattr('start_time','<=', nowtime.isoformat()) | list | last %}
+        {{ current.price_per_kwh if current is not none else 'unavailable' }}
+      {% else %}
+        unavailable
+      {% endif %}
+
+  - name: Energiepreis_günstig
+    unit_of_measurement: "ct/kWh"
+    device_class: monetary
+    state: "{{states('sensor.3h_gunstig')|float(0)+0.1}}"
+
+  - name: Energiepreislimit_heizung_ct
+    unit_of_measurement: "ct/kWh"
+    device_class: monetary
+    state: "{{states('sensor.energiepreislimit_heizung_p50')|float(0)|round(1, 'ceil')}}"
+      ##{% set calculated = ((states('sensor.energiepreis_hoch')|float(0) - states('sensor.energiepreis_durchschnitt')|float(0)) * 0.1 + states('sensor.energiepreis_durchschnitt')|float(0)) %}
+      ##{{ [calculated, 35] | min | round(2) }}
+      
+
+  - name: Energiepreislimit_heizung_p75
+    unit_of_measurement: "ct/kWh"
+    device_class: monetary
+    state: >-
+      {%- set aufschlag = 1.79 -%}
+      {%- set steuer = 1.2 -%}
+      {%- set netzentgelt_ct = states('input_number.netznutzungsentgelt')|float(0) * 100 -%}
+      {%- set spotty_data = state_attr('sensor.spotty_15_raw', 'data') -%}
+      {%- set jetzt = now() -%}
+      {%- set morgen_ende = (now() + timedelta(days=1)).replace(hour=23, minute=59) -%}
+      {%- set preise = namespace(liste=[]) -%}
+      {%- if spotty_data -%}
+        {%- for eintrag in spotty_data -%}
+          {%- set eintrag_zeit = eintrag.start_time | as_datetime -%}
+          {%- if eintrag_zeit >= jetzt and eintrag_zeit <= morgen_ende -%}
+            {%- set spot_ct = eintrag.price_per_kwh|float(0) -%}
+            {%- set vollpreis = ((spot_ct + aufschlag) * steuer + netzentgelt_ct) -%}
+            {%- set preise.liste = preise.liste + [vollpreis] -%}
+          {%- endif -%}
+        {%- endfor -%}
+      {%- endif -%}
+      {%- if preise.liste|length > 0 -%}
+        {%- set sortiert = preise.liste|sort -%}
+        {%- set percentil_index = ((sortiert|length - 1) * 0.75)|int -%}
+        {{ [sortiert[percentil_index], 35] | min | round(2) }}
+      {%- else -%}
+        35
+      {%- endif -%}
+
+  # Preislimit Perzentil 50% (ausgewogen: günstigere Hälfte nutzen)
+  - name: Energiepreislimit_heizung_p50
+    unit_of_measurement: "ct/kWh"
+    device_class: monetary
+    state: >-
+      {%- set aufschlag = 1.79 -%}
+      {%- set steuer = 1.2 -%}
+      {%- set netzentgelt_ct = states('input_number.netznutzungsentgelt')|float(0) * 100 -%}
+      {%- set spotty_data = state_attr('sensor.spotty_15_raw', 'data') -%}
+      {%- set jetzt = now() -%}
+      {%- set morgen_ende = (now() + timedelta(days=1)).replace(hour=23, minute=59) -%}
+      {%- set preise = namespace(liste=[]) -%}
+      {%- if spotty_data -%}
+        {%- for eintrag in spotty_data -%}
+          {%- set eintrag_zeit = eintrag.start_time | as_datetime -%}
+          {%- if eintrag_zeit >= jetzt and eintrag_zeit <= morgen_ende -%}
+            {%- set spot_ct = eintrag.price_per_kwh|float(0) -%}
+            {%- set vollpreis = ((spot_ct + aufschlag) * steuer + netzentgelt_ct) -%}
+            {%- set preise.liste = preise.liste + [vollpreis] -%}
+          {%- endif -%}
+        {%- endfor -%}
+      {%- endif -%}
+      {%- if preise.liste|length > 0 -%}
+        {%- set sortiert = preise.liste|sort -%}
+        {%- set percentil_index = ((sortiert|length - 1) * 0.5)|int -%}
+        {{ [sortiert[percentil_index], 35] | min | round(2) }}
+      {%- else -%}
+        35
+      {%- endif -%}
+
+  
+  - name: "6 Kleinste zukünftige Preise"
+    state: >
+          {% set now = utcnow().isoformat() %}
+          {% set data = state_attr('sensor.spotty_15_raw', 'data') %}
+          {% set future_prices = data | selectattr('start_time', '>', now) | list %}
+          {% set sorted_prices = future_prices | sort(attribute='price_per_kwh') %}
+          {{ sorted_prices[:24] | map(attribute='price_per_kwh') | list }}
+    attributes:
+          prices_with_times: >
+            {% set now = utcnow().isoformat() %}
+            {% set data = state_attr('sensor.spotty_15_raw', 'data') %}
+            {% set future_prices = data | selectattr('start_time', '>', now) | list %}
+            {% set sorted_prices = future_prices | sort(attribute='price_per_kwh') %}
+            {{ sorted_prices[:24] | list }}
+  
+  - name: "3h günstig"
+    unit_of_measurement: "ct/kWh"
+    device_class: monetary
+    state: >
+          {% set data = states('sensor.6_kleinste_zukunftige_preise') %}
+          {%set cleaneddata = data.replace('[', '').replace(']', '') %}
+          {% set Array = cleaneddata.split(',') %}
+          {{ ((Array[8]|float(0)+1.79)*1.2+states('input_number.netznutzungsentgelt')|float(0)*100)|round(2)}}
+  
+  - name: "4h günstig"
+    unit_of_measurement: "ct/kWh"
+    device_class: monetary
+    state: >
+          {% set data = states('sensor.6_kleinste_zukunftige_preise') %}
+          {%set cleaneddata = data.replace('[', '').replace(']', '') %}
+          {% set Array = cleaneddata.split(',') %}
+          {{ ((Array[3]|float(0)+1.79)*1.2+states('input_number.netznutzungsentgelt')|float(0)*100)|round(2)}}
+  
+  - name: "5h günstig"
+    unit_of_measurement: "ct/kWh"
+    device_class: monetary
+    state: >
+          {% set data = states('sensor.6_kleinste_zukunftige_preise') %}
+          {%set cleaneddata = data.replace('[', '').replace(']', '') %}
+          {% set Array = cleaneddata.split(',') %}
+          {{ ((Array[16]|float(0)+1.79)*1.2+states('input_number.netznutzungsentgelt')|float(0)*100)|round(2)}}
+
+  - name: "6h günstig"
+    unit_of_measurement: "ct/kWh"
+    device_class: monetary
+    state: >
+          {% set data = states('sensor.6_kleinste_zukunftige_preise') %}
+          {%set cleaneddata = data.replace('[', '').replace(']', '') %}
+          {% set Array = cleaneddata.split(',') %}
+          {{ ((Array[20]|float(0)+1.79)*1.2+states('input_number.netznutzungsentgelt')|float(0)*100)|round(2)}}
+
+  - name: "EPEX Calculated"
+    unique_id: epex_calculated
+    state_class: measurement
+    state: >
+      {% if state_attr('sensor.epex_spot_at_price', 'data') and state_attr('sensor.epex_spot_at_price', 'data')|length > 0 %}
+        {% set current_hour = now().hour %}
+        {% set current_entry = state_attr('sensor.epex_spot_at_price', 'data') | selectattr('start_time', 'match', '.*T' + '%02d'|format(current_hour) + ':00:00') | first | default(state_attr('sensor.epex_spot_at_price', 'data')[0]) %}
+        {{ ((current_entry.price_per_kwh * 100 + 1.79) * 1.2 + 13.14)|round(1) }}
+      {% else %}
+        unavailable
+      {% endif %}
+    unit_of_measurement: "ct/kWh"
+    attributes:
+      data: >
+        {% if state_attr('sensor.epex_spot_at_price', 'data') %}
+          {% set ns = namespace(calculated_data=[]) %}
+          {% for entry in state_attr('sensor.epex_spot_at_price', 'data') %}
+            {% set calculated_price_ct_kwh = ((entry.price_per_kwh * 100 + 1.79) * 1.2 + 13.14)|round(1) %}
+            {% set ns.calculated_data = ns.calculated_data + [{
+              "start_time": entry.start_time,
+              "end_time": entry.end_time,
+              "price_per_kwh": calculated_price_ct_kwh
+            }] %}
+          {% endfor %}
+          {{ ns.calculated_data }}
+        {% else %}
+          []
+        {% endif %}
+
+  - name: Niedrigster Preis 20-23 Uhr
+    unit_of_measurement: "€/kWh"
+    device_class: monetary
+    state: >
+      {% set entries = state_attr('sensor.spotty_15_raw', 'data') %}
+      {% set today = now().date() %}
+      {% set start_filter = today|string + 'T20:00:00' %}
+      {% set end_filter = today|string + 'T23:45:00' %}
+      {% set filtered_prices = entries
+        | selectattr('start_time', '>=', start_filter)
+        | selectattr('start_time', '<=', end_filter)
+        | map(attribute='price_per_kwh')
+        | list %}
+      {% if filtered_prices | length >= 4 %}
+        {% set four_cheapest = filtered_prices | sort %}
+        {% set base_price = four_cheapest[3] / 100 + 0.0179 %}
+        {% set with_tax = base_price * 1.2 %}
+        {% set total = with_tax + states('input_number.strom_abgaben')|float(0) + states('input_number.netznutzungsentgelt')|float(0) %}
+        {{ total | round(4) }}
+      {% elif filtered_prices %}
+        {% set base_price = filtered_prices | max / 100 + 0.0179 %}
+        {% set with_tax = base_price * 1.2 %}
+        {% set total = with_tax + states('input_number.strom_abgaben')|float(0) + states('input_number.netznutzungsentgelt')|float(0) %}
+        {{ total | round(4) }}
+      {% else %}
+        0
+      {% endif %}
+
+  - name: Niedrigster Preis 0-7 Uhr
+    unit_of_measurement: "€/kWh"
+    device_class: monetary
+    state: >
+      {% set entries = state_attr('sensor.spotty_15_raw', 'data') %}
+      {% set tomorrow = (now() + timedelta(days=1)).date() %}
+      {% set start_filter = tomorrow|string + 'T00:00:00' %}
+      {% set end_filter = tomorrow|string + 'T06:45:00' %}
+      {% set filtered_prices = entries
+        | selectattr('start_time', '>=', start_filter)
+        | selectattr('start_time', '<=', end_filter)
+        | map(attribute='price_per_kwh')
+        | list %}
+      {% if filtered_prices | length >= 4 %}
+        {% set four_cheapest = filtered_prices | sort %}
+        {% set base_price = four_cheapest[3] / 100 + 0.0179 %}
+        {% set with_tax = base_price * 1.2 %}
+        {% set total = with_tax + states('input_number.strom_abgaben')|float(0) + states('input_number.netznutzungsentgelt')|float(0) %}
+        {{ total | round(4) }}
+      {% elif filtered_prices %}
+        {% set base_price = filtered_prices | max / 100 + 0.0179 %}
+        {% set with_tax = base_price * 1.2 %}
+        {% set total = with_tax + states('input_number.strom_abgaben')|float(0) + states('input_number.netznutzungsentgelt')|float(0) %}
+        {{ total | round(4) }}
+      {% else %}
+        0
+      {% endif %}
