@@ -1,0 +1,76 @@
+trigger:
+  - platform: time
+    at: 
+      - "07:10:00"
+      - "15:10:00"
+  - platform: homeassistant
+    event: start
+
+sensor:
+  - name: "Warmwasser Zeitfenster"
+    unique_id: warmwasser_zeitfenster
+    state: "{{ now().isoformat() }}"
+    attributes:
+      best_windows: >
+        {% set prices = state_attr('sensor.spotty_15_future', 'data') %}
+        {% set stored = states('input_text.warmwasser_gespeicherte_fenster') %}
+        {% set current_time = now() %}
+        
+        {% if prices is none or prices|length < 6 %}
+          []
+        {% else %}
+          {% set ns = namespace(windows=[], selected=[], use_stored=false) %}
+          
+          {# Prüfe gespeicherte Fenster #}
+          {% if stored not in ['', 'unknown', 'unavailable'] %}
+            {% set stored_data = stored | from_json %}
+            {% if stored_data is iterable and stored_data|length > 0 %}
+              {% set last_end = (stored_data | map(attribute='end') | list | max) | as_datetime %}
+              {% if current_time < last_end %}
+                {% set ns.selected = stored_data %}
+                {% set ns.use_stored = true %}
+              {% endif %}
+            {% endif %}
+          {% endif %}
+          
+          {# Nur neu berechnen wenn nötig #}
+          {% if not ns.use_stored %}
+            {% for i in range(prices|length - 5) %}
+              {% set window = prices[i:i+6] %}
+              {% set start = window[0].start_time | as_datetime %}
+              {% set end = start + timedelta(hours=1.5) %}
+              {% set avg = (window | sum(attribute='price_per_kwh')) / 6 %}
+              {% set ns.windows = ns.windows + [{'start': start.isoformat(), 'end': end.isoformat(), 'avg': avg | round(2), 'index': i}] %}
+            {% endfor %}
+            
+            {% set sorted_windows = ns.windows | sort(attribute='avg') | list %}
+            
+            {# Wähle nicht-überlappende Fenster aus mit intelligenter Preislogik #}
+            {% for win in sorted_windows %}
+              {% set overlap = namespace(found=false) %}
+              {% for selected in ns.selected %}
+                {% set start_diff = (win.start | as_datetime - selected.start | as_datetime).total_seconds() | abs %}
+                {% if start_diff <= 7200 %}
+                  {% set overlap.found = true %}
+                {% endif %}
+              {% endfor %}
+              
+              {# Prüfe ob zweites Fenster Sinn macht (max 20% teurer als das erste) #}
+              {% if not overlap.found %}
+                {% if ns.selected|length == 0 %}
+                  {# Erstes Fenster immer nehmen #}
+                  {% set ns.selected = ns.selected + [{'start': win.start, 'end': win.end, 'avg': win.avg}] %}
+                {% elif ns.selected|length < 2 and win.avg <= ns.selected[0].avg * 1.2 %}
+                  {# Zweites Fenster nur wenn max 20% teurer #}
+                  {% set ns.selected = ns.selected + [{'start': win.start, 'end': win.end, 'avg': win.avg}] %}
+                {% endif %}
+              {% endif %}
+            {% endfor %}
+            
+            {# Sortiere finale Auswahl nach Zeit #}
+            {% set ns.selected = ns.selected | sort(attribute='start') | list %}
+          {% endif %}
+          
+          {{ ns.selected }}
+        {% endif %}
+      count_windows: 2
