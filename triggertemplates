@@ -1,0 +1,86 @@
+trigger:
+  - platform: time_pattern
+    minutes: "1"
+
+sensor:
+  - name: Energiepreis_Durchschnitt
+    unit_of_measurement: "ct/kWh"
+    device_class: monetary
+    state: >-
+          {% set ns = namespace(sum = 0, count = 0) %}
+          {% for item in state_attr('sensor.spotty_15_raw', 'data') -%}
+            {% if as_datetime(item.start_time).timestamp() > now().timestamp()  %}
+            {% set ns.sum = ns.sum + item.price_per_kwh %}
+            {% set ns.count = ns.count + 1 %}
+          {% endif %}
+          {%- endfor %}
+          {{ (((ns.sum/ns.count)+1.79)*1.2+states('input_number.netznutzungsentgelt')|float(0)*100)|round(2) }}
+  
+  - name: Energiepreis_niedrig
+    unit_of_measurement: "ct/kWh"
+    device_class: monetary
+    state: >-
+          {% set ns = namespace(lowest = 999999, time = "") %}
+          {% for item in state_attr('sensor.spotty_15_raw', 'data') -%}
+            {% if as_datetime(item.start_time).timestamp() > now().timestamp()  %}
+              {% if item.price_per_kwh < ns.lowest  %}
+                {% set ns.lowest = item.price_per_kwh %}
+                {% set ns.time = item.start_time %}
+              {% endif %}
+            {% endif %}
+          {%- endfor %}
+          {{ ((ns.lowest+1.79)*1.2+states('input_number.netznutzungsentgelt')|float(0)*100)|round(2)}}
+
+  - name: Energiepreis_hoch
+    unit_of_measurement: "ct/kWh"
+    device_class: monetary
+    state: >-
+          {% set ns = namespace(highest = 0, time = "") %}
+          {% for item in state_attr('sensor.spotty_15_raw', 'data') -%}
+            {% if as_datetime(item.start_time).timestamp() > now().timestamp()  %}
+              {% if item.price_per_kwh > ns.highest  %}
+                {% set ns.highest = item.price_per_kwh %}
+                {% set ns.time = item.start_time %}
+              {% endif %}
+          {% endif %}
+          {%- endfor %}
+          {{ ((ns.highest+1.79)*1.2+states('input_number.netznutzungsentgelt')|float(0)*100)|round(2)}}
+  
+  - name: effektiver Energiepreis
+    unit_of_measurement: "€/kWh"
+    device_class: monetary
+    state: "{{(states('sensor.energie_import_kosten_monatlich')|float/states('sensor.energy_import_monthly')|float)|round(3)}}"
+
+  - name: effektiver Arbeitspreis brutto
+    unit_of_measurement: "€/kWh"
+    device_class: monetary
+    state: "{{((states('sensor.energie_import_kosten_monatlich')|float-states('sensor.netzentgelt_monatlich_2025')|float-states('sensor.strom_fixkosten_monatlich')|float)/states('sensor.energy_import_monthly')|float)|round(3)}}"
+  
+
+  - name: Energiepreis_hoch_12h
+    unit_of_measurement: "ct/kWh"
+    device_class: monetary
+    state: >-
+          {% set ns = namespace(highest = 0, time = "") %}
+          {% for item in state_attr('sensor.spotty_15_raw', 'data') -%}
+            {% if as_datetime(item.start_time).timestamp() > now().timestamp() and as_datetime(item.start_time).timestamp() < now().timestamp()+12*60*60   %}
+              {% if item.price_per_kwh > ns.highest  %}
+                {% set ns.highest = item.price_per_kwh %}
+                {% set ns.time = item.start_time %}
+              {% endif %}
+          {% endif %}
+          {%- endfor %}
+          {{ ((ns.highest+1.79)*1.2+states('input_number.netznutzungsentgelt')|float(0)*100)|round(2)}}
+
+  - name: Energiepreis_Durchschnitt_12h
+    unit_of_measurement: "ct/kWh"
+    device_class: monetary
+    state: >-
+          {% set ns = namespace(sum = 0, count = 0) %}
+          {% for item in state_attr('sensor.spotty_15_raw', 'data') -%}
+            {% if as_datetime(item.start_time).timestamp() > now().timestamp() and as_datetime(item.start_time).timestamp() < now().timestamp()+12*60*60 %}
+            {% set ns.sum = ns.sum + item.price_per_kwh %}
+            {% set ns.count = ns.count + 1 %}
+          {% endif %}
+          {%- endfor %}
+          {{ (((ns.sum/ns.count)+1.79)*1.2+states('input_number.netznutzungsentgelt')|float(0)*100)|round(2) }}
