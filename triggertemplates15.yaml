@@ -1,0 +1,97 @@
+trigger:
+  - platform: time_pattern
+    minutes: "/15"
+
+sensor:
+  - name: EPEX Spot 15 aktueller Preis
+    unit_of_measurement: "ct/kWh"
+    state: >-
+      {% set prices = state_attr('sensor.spotty_15_raw','data') %}
+      {% if prices is not none %}
+        {% set nowtime = now() %}
+        {% set current = prices | selectattr('start_time','<=', nowtime.isoformat()) | list | last %}
+        {{ current.price_per_kwh if current is not none else 'unavailable' }}
+      {% else %}
+        unavailable
+      {% endif %}
+
+  - name: EPEX Spot 15 nächster Preis
+    unit_of_measurement: "ct/kWh"
+    state: >-
+      {% set prices = state_attr('sensor.spotty_15_raw','data') %}
+      {% if prices is not none %}
+        {% set nowtime = now() %}
+        {% set next = prices | selectattr('start_time','>', nowtime.isoformat()) | list | first %}
+        {{ next.price_per_kwh if next is not none else 'unavailable' }}
+      {% else %}
+        unavailable
+      {% endif %}
+
+  - name: EPEX Spot 15 nächster Preis 2
+    unit_of_measurement: "ct/kWh"
+    device_class: monetary
+    state: >-
+      {% set prices = state_attr('sensor.spotty_15_raw','data') %}
+      {% if prices is not none %}
+        {% set nowtime = now() %}
+        {% set future = prices | selectattr('start_time','>', nowtime.isoformat()) | list %}
+        {{ (future[1].price_per_kwh if future | length > 1 else 0) | round(2) }}
+      {% else %}
+        0
+      {% endif %}
+
+  - name: EPEX Spot 15 nächster Preis 3
+    unit_of_measurement: "ct/kWh"
+    device_class: monetary
+    state: >-
+      {% set prices = state_attr('sensor.spotty_15_raw','data') %}
+      {% if prices is not none %}
+        {% set nowtime = now() %}
+        {% set future = prices | selectattr('start_time','>', nowtime.isoformat()) | list %}
+        {{ (future[2].price_per_kwh if future | length > 2 else 0) | round(2) }}
+      {% else %}
+        0
+      {% endif %}
+
+  - name: EPEX Spot 15 nächster Preis 4
+    unit_of_measurement: "ct/kWh"
+    device_class: monetary
+    state: >-
+      {% set prices = state_attr('sensor.spotty_15_raw','data') %}
+      {% if prices is not none %}
+        {% set nowtime = now() %}
+        {% set future = prices | selectattr('start_time','>', nowtime.isoformat()) | list %}
+        {{ (future[3].price_per_kwh if future | length > 2 else 0) | round(2) }}
+      {% else %}
+        0
+      {% endif %}
+
+  - name: "Spotty 15 Future"
+    unique_id: spotty_15_future
+    state: "{{ states('sensor.spotty_15_raw') }}"
+    attributes:
+      tariff: "{{ state_attr('sensor.spotty_15_raw', 'tariff') }}"
+      unit: "ct/kWh"  # Geändert, da jetzt finale Preise
+      interval: "{{ state_attr('sensor.spotty_15_raw', 'interval') }}"
+      friendly_name: "spotty_15_future"
+      data: >
+        {%- set current_time = now() %}
+        {%- set all_data = state_attr('sensor.spotty_15_raw', 'data') %}
+        {%- set netznutzung = states('input_number.netznutzungsentgelt') | float(0) %}
+        {%- set netznutzung_ct = netznutzung * 100 %}
+        {%- if all_data %}
+          {%- set ns = namespace(result=[]) %}
+          {%- for entry in all_data %}
+            {%- if entry.start_time >= current_time.isoformat() %}
+              {%- set spot_price = entry.price_per_kwh | float(0) %}
+              {%- set final_price = (spot_price + 1.79) * 1.2 + netznutzung_ct %}
+              {%- set ns.result = ns.result + [{
+                'start_time': entry.start_time,
+                'price_per_kwh': final_price | round(3)
+              }] %}
+            {%- endif %}
+          {%- endfor %}
+          {{ ns.result }}
+        {% else %}
+          []
+        {% endif %}
