@@ -15,7 +15,7 @@ sensor:
         unavailable
       {% endif %}
 
-  - name: EPEX Spot 15 nächster Preis
+  - name: EPEX Spot 15 naechster Preis
     unit_of_measurement: "ct/kWh"
     state: >-
       {% set prices = state_attr('sensor.spotty_15_raw','data') %}
@@ -27,7 +27,7 @@ sensor:
         unavailable
       {% endif %}
 
-  - name: EPEX Spot 15 nächster Preis 2
+  - name: EPEX Spot 15 naechster Preis 2
     unit_of_measurement: "ct/kWh"
     device_class: monetary
     state: >-
@@ -40,7 +40,7 @@ sensor:
         0
       {% endif %}
 
-  - name: EPEX Spot 15 nächster Preis 3
+  - name: EPEX Spot 15 naechster Preis 3
     unit_of_measurement: "ct/kWh"
     device_class: monetary
     state: >-
@@ -53,7 +53,7 @@ sensor:
         0
       {% endif %}
 
-  - name: EPEX Spot 15 nächster Preis 4
+  - name: EPEX Spot 15 naechster Preis 4
     unit_of_measurement: "ct/kWh"
     device_class: monetary
     state: >-
