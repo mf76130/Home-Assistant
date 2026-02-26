@@ -146,16 +146,16 @@ sensor:
     device_class: power
     state: >
       {% set charging = states('sensor.marstek_battery_power') | float(0) %}
-      {% set previous_value = states('input_number.marstek_0_ladung_previous') | float(0) %}
+      {% set previous_value = states('sensor.marstek_0_ladung') | float(0) %}
       {% set deadband = 100 %}  {# Totzone von ±100W #}
       {# Nur ändern wenn außerhalb der Totzone #}
       {% if charging | abs < deadband %}
         {{ previous_value }}  {# Wert beibehalten #}
       {% else %}
         {# Schrittweise Anpassung #}
-        {% if charging > previous_value %}
+        {% if charging > 0 %}
           {{ previous_value + 50 }}
-        {% elif charging < previous_value %}
+        {% elif charging < 0 %}
           {{ previous_value - 50 }}
         {% else %}
           {{ charging }}
