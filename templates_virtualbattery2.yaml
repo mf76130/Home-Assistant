@@ -1,0 +1,42 @@
+sensor:
+  - name: "Virtueller Akku 2 – SOC Prozent"
+    unit_of_measurement: "%"
+    state: >
+      {{ ((states('input_number.virtual_battery_2_soc') | float / 5000) * 100) | round(1) }}
+    icon: mdi:battery
+
+  - name: "Virtueller Akku 2 – Modus"
+    state: >
+      {% set soc = states('input_number.virtual_battery_2_soc') | float %}
+      {% set grid_w = states('sensor.leistung_alle_phasen') | float %}
+      {% if grid_w > 0 and soc > 600 %}
+        entladen
+      {% elif grid_w < 0 and soc < 5000 %}
+        laden
+      {% else %}
+        idle
+      {% endif %}
+
+  - name: "Virtueller Akku 2 – Ladeleistung W"
+    unit_of_measurement: "W"
+    device_class: power
+    state: >
+      {% set soc = states('input_number.virtual_battery_2_soc') | float(0) %}
+      {% set grid_w = states('sensor.leistung_alle_phasen') | float(0) %}
+      {% if grid_w < 0 and soc < 5000 %}
+        {{ [grid_w | abs, 2500] | min | round(0) }}
+      {% else %}
+        0
+      {% endif %}
+
+  - name: "Virtueller Akku 2 – Entladeleistung W"
+    unit_of_measurement: "W"
+    device_class: power
+    state: >
+      {% set soc = states('input_number.virtual_battery_2_soc') | float(0) %}
+      {% set grid_w = states('sensor.leistung_alle_phasen') | float(0) %}
+      {% if grid_w > 0 and soc > 600 %}
+        {{ [grid_w, 2500] | min | round(0) }}
+      {% else %}
+        0
+      {% endif %}
