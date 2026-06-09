@@ -1,0 +1,55 @@
+# ============================================================
+# Virtueller zweiter Akku – Simulation für Kaufentscheidung
+# ============================================================
+
+sensor:
+  - platform: history_stats
+    name: "Virtueller Akku 2 – Stunden entladen heute"
+    entity_id: sensor.virtueller_akku_2_modus
+    state: "entladen"
+    type: time
+    start: "{{ now().replace(hour=0, minute=0, second=0) }}"
+    end: "{{ now() }}"
+
+  - platform: history_stats
+    name: "Virtueller Akku 2 – Stunden geladen heute"
+    entity_id: sensor.virtueller_akku_2_modus
+    state: "laden"
+    type: time
+    start: "{{ now().replace(hour=0, minute=0, second=0) }}"
+    end: "{{ now() }}"
+
+  - platform: integration
+    name: "Virtueller Akku 2 – Energie entladen kWh"
+    source: sensor.virtueller_akku_2_entladeleistung_w
+    unit_prefix: k
+    round: 3
+    method: trapezoidal
+
+  - platform: integration
+    name: "Virtueller Akku 2 – Energie geladen kWh"
+    source: sensor.virtueller_akku_2_ladeleistung_w
+    unit_prefix: k
+    round: 3
+    method: trapezoidal
+
+utility_meter:
+  virtual_battery_2_energie_entladen_taglich:
+    name: "Virtueller Akku 2 – Entladen heute (kWh)"
+    source: sensor.virtueller_akku_2_energie_entladen_kwh
+    cycle: daily
+
+  virtual_battery_2_energie_geladen_taglich:
+    name: "Virtueller Akku 2 – Geladen heute (kWh)"
+    source: sensor.virtueller_akku_2_energie_geladen_kwh
+    cycle: daily
+
+  virtual_battery_2_energie_entladen_monatlich:
+    name: "Virtueller Akku 2 – Entladen Monat (kWh)"
+    source: sensor.virtueller_akku_2_energie_entladen_kwh
+    cycle: monthly
+
+  virtual_battery_2_energie_geladen_monatlich:
+    name: "Virtueller Akku 2 – Geladen Monat (kWh)"
+    source: sensor.virtueller_akku_2_energie_geladen_kwh
+    cycle: monthly
